@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Proxmox Intent UI</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #eceff1; padding: 40px; }
+        .container { background: white; max-width: 700px; margin: auto; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        #terminal { background: #121212; color: #00e676; padding: 15px; border-radius: 6px; height: 350px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 13px; white-space: pre-wrap; margin-top: 20px; }
+        button { background: #1976d2; color: white; border: none; padding: 12px 25px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        button:disabled { background: #b0bec5; }
+        input { padding: 10px; width: 60px; border: 1px solid #ccc; border-radius: 4px; margin-right: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Proxmox Infrastructure</h2>
+    <p>Specify worker nodes to provision on the Proxmox cluster.</p>
+
+    <label>Worker Count: </label>
+    <input type="number" id="workerCount" value="2" min="1" max="10">
+    <button id="deployBtn">Deploy Cluster</button>
+
+    <div id="terminal">System Ready... Waiting for intent.</div>
+</div>
+
+<script>
+    const btn = document.getElementById('deployBtn');
+    const terminal = document.getElementById('terminal');
+
+    btn.onclick = async () => {
+        btn.disabled = true;
+        terminal.innerText = "Connecting to Proxmox API...\n";
+        
+        const formData = new FormData();
+        formData.append('worker_count', document.getElementById('workerCount').value);
+
+        try {
+            const response = await fetch('/provision', { method: 'POST', body: formData });
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                terminal.innerText += decoder.decode(value);
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+        } catch (e) {
+            terminal.innerText += "\n[Error] Could not connect to the backend.";
+        } finally {
+            btn.disabled = false;
+        }
+    };
+</script>
+
+</body>
+</html>
