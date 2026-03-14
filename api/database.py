@@ -1,8 +1,9 @@
 import os
 import sqlite3
-
+import logging
 from . import config
 
+logger = logging.getLogger(__name__)
 
 def get_db() -> sqlite3.Connection:
     os.makedirs(config.DATA_DIR, exist_ok=True)
@@ -11,9 +12,9 @@ def get_db() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
-
 def init_db():
     conn = get_db()
+    # 1. Run the base schema
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS environments (
             id TEXT PRIMARY KEY,
@@ -31,6 +32,7 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'creating',
             ip_start INTEGER NOT NULL,
             environment_id TEXT REFERENCES environments(id) ON DELETE SET NULL,
+            grafana_password TEXT, 
             created_at TEXT NOT NULL
         );
 
@@ -85,15 +87,28 @@ def init_db():
             UNIQUE(user_id, resource_type, resource_id)
         );
     """)
+    
+    # 2. Run migrations for existing databases
+    _migrate(conn)
+    
     conn.commit()
     conn.close()
 
-
 def _migrate(conn: sqlite3.Connection):
-    """Run any necessary schema migrations."""
-    # Drop UNIQUE constraint on clusters.name so deleted cluster names can be reused
+    """Run necessary schema migrations for existing databases."""
+    
+    # Check if grafana_password column exists
+    cursor = conn.execute("PRAGMA table_info(clusters)")
+    columns = [row['name'] for row in cursor.fetchall()]
+    
+    if 'grafana_password' not in columns:
+        logger.info("Migration: Adding grafana_password column to clusters table")
+        conn.execute("ALTER TABLE clusters ADD COLUMN grafana_password TEXT")
+
+    # Drop UNIQUE constraint on clusters.name if it still exists
     row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='clusters'").fetchone()
     if row and 'name TEXT UNIQUE' in row[0]:
+        logger.info("Migration: Removing UNIQUE constraint from clusters.name")
         conn.executescript("""
             PRAGMA foreign_keys = OFF;
             ALTER TABLE clusters RENAME TO _clusters_old;
@@ -106,9 +121,12 @@ def _migrate(conn: sqlite3.Connection):
                 status TEXT NOT NULL DEFAULT 'creating',
                 ip_start INTEGER NOT NULL,
                 environment_id TEXT REFERENCES environments(id) ON DELETE SET NULL,
+                grafana_password TEXT,
                 created_at TEXT NOT NULL
             );
-            INSERT INTO clusters SELECT * FROM _clusters_old;
+            INSERT INTO clusters (id, name, node_count, control_plane_count, worker_count, status, ip_start, environment_id, created_at)
+            SELECT id, name, node_count, control_plane_count, worker_count, status, ip_start, environment_id, created_at 
+            FROM _clusters_old;
             DROP TABLE _clusters_old;
             PRAGMA foreign_keys = ON;
         """)

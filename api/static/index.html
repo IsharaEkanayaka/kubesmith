@@ -423,21 +423,40 @@ async function loadClusters() {
   try {
     const data = await apiFetch('/clusters');
     if (!data.length) { el.innerHTML = emptyState('No clusters yet'); _stopClusterPoll(); return; }
+    
+    // "Monitor" header 
     el.innerHTML = `<table>
-      <tr><th>ID</th><th>Name</th><th>Nodes</th><th>Control Plane</th><th>Workers</th><th>Status</th><th>Latest Job</th><th>Created</th><th></th></tr>
-      ${data.map(c => `<tr>
-        <td class="mono">${esc(c.id)}</td>
-        <td>${esc(c.name)}</td>
-        <td>${c.node_count}</td>
-        <td class="mono" style="font-size:11px">${c.nodes.control_plane.join(', ')}</td>
-        <td class="mono" style="font-size:11px">${c.nodes.workers.join(', ')}</td>
-        <td>${badge(c.status)}</td>
-        <td>${c.latest_job_id ? `<a href="#" class="mono" style="font-size:12px" onclick="event.preventDefault();goToJob('${c.latest_job_id}')">${esc(c.latest_job_id)}</a>` : '—'}</td>
-        <td style="font-size:12px; color:var(--muted)">${timeAgo(c.created_at)}</td>
-        <td><button class="btn btn-danger btn-sm" onclick="deleteCluster('${c.id}')">Delete</button></td>
-      </tr>`).join('')}
+      <tr><th>ID</th><th>Name</th><th>Nodes</th><th>Control Plane</th><th>Workers</th><th>Status</th><th>Latest Job</th><th>Created</th><th>Monitor</th><th></th></tr>
+      ${data.map(c => {
+        
+        const monitorUrl = `/monitor/open/${c.id}`;
+
+        const isRunning = c.status === 'running';
+        const buttonDisabled = !isRunning ? 'disabled style="opacity: 0.5; cursor: not-allowed;"' : '';
+        const linkWrapper = isRunning ? `href="${monitorUrl}" target="_blank"` : '';
+
+        return `<tr>
+          <td class="mono">${esc(c.id)}</td>
+          <td>${esc(c.name)}</td>
+          <td>${c.node_count}</td>
+          <td class="mono" style="font-size:11px">${c.nodes.control_plane.join(', ')}</td>
+          <td class="mono" style="font-size:11px">${c.nodes.workers.join(', ')}</td>
+          <td>${badge(c.status)}</td>
+          <td>${c.latest_job_id ? `<a href="#" class="mono" style="font-size:12px" onclick="event.preventDefault();goToJob('${c.latest_job_id}')">${esc(c.latest_job_id)}</a>` : '—'}</td>
+          <td style="font-size:12px; color:var(--muted)">${timeAgo(c.created_at)}</td>
+          
+          <td>
+            <a ${linkWrapper} style="text-decoration: none;">
+              <button class="btn btn-cyan btn-sm" ${buttonDisabled}>Monitor</button>
+            </a>
+          </td>
+          
+          <td><button class="btn btn-danger btn-sm" onclick="deleteCluster('${c.id}')">Delete</button></td>
+        </tr>`
+      }).join('')}
     </table>`;
-    // Auto-poll while any cluster is in a transitional state
+    
+
     if (data.some(c => ['creating', 'deleting'].includes(c.status))) {
       _startClusterPoll();
     } else {

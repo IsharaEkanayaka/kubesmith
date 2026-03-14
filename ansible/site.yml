@@ -31,3 +31,43 @@
     - name: Display cluster nodes
       debug:
         msg: "{{ nodes_output.stdout_lines }}"
+
+- name: Setup Prometheus & Grafana Monitoring
+  hosts: control_plane
+  become: false  # Running as 'ubuntu' so it uses the correct ~/.kube/config
+  tasks:
+    - name: Download Helm install script
+      get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /tmp/get_helm.sh
+        mode: '0700'
+
+    - name: Install Helm binary
+      become: true  # Needs root to put Helm in /usr/local/bin
+      command: /tmp/get_helm.sh
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Add Prometheus community Helm repository
+      command: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Update Helm repositories
+      command: helm repo update
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Install kube-prometheus-stack
+      command: >
+        helm upgrade --install monitoring prometheus-community/kube-prometheus-stack
+        --namespace monitoring
+        --create-namespace
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Fetch kubeconfig back to your machine
+      fetch:
+        src: /home/ubuntu/.kube/config
+        dest: ~/.kube/config
+        flat: yes

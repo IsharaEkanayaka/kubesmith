@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -51,7 +52,7 @@ def _setup_workspace(cluster_id: str) -> str:
             src = os.path.join(config.TERRAFORM_DIR, f)
             dst = os.path.join(tf_dir, f)
             if not os.path.exists(dst):
-                os.symlink(src, dst)
+                shutil.copy(src, dst)
     return tf_dir
 
 
@@ -61,9 +62,12 @@ def _generate_tfvars(tf_dir: str, cluster_id: str):
     db.close()
 
     base = config.read_base_tfvars()
+    #  some names the proxmox doesn't approve. For that as a fix - (example: "Test Cluster 1" -> "test-cluster-1")
+    safe_name = re.sub(r'[^a-z0-9-]', '-', cluster["name"].lower())
 
+    # NOTE: 
     lines = [
-        f'proxmox_api_url          = "{base.get("proxmox_api_url", "")}"',
+        f'proxmox_api_url          = "https://127.0.0.1:8006/api2/json"',
         f'proxmox_api_token_id     = "{base.get("proxmox_api_token_id", "")}"',
         f'proxmox_api_token_secret = "{base.get("proxmox_api_token_secret", "")}"',
         '',
@@ -83,13 +87,34 @@ def _generate_tfvars(tf_dir: str, cluster_id: str):
 
 
 def _run_cmd(args: list[str], cwd: str, env: dict | None = None, timeout: int = 1800) -> str:
-    result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
-    if result.returncode != 0:
-        output = (result.stderr or '') + (result.stdout or '')
-        # Keep only last 2000 chars to avoid huge DB entries
-        output = output[-2000:] if len(output) > 2000 else output
-        raise RuntimeError(f"{args[0]} failed (exit {result.returncode}): {output}")
-    return result.stdout
+    print(f"\n --- STARTING COMMAND: {' '.join(args)} ---\n")
+    
+    # Use Popen to stream logs in real-time
+    process = subprocess.Popen(
+        args, 
+        cwd=cwd, 
+        env=env, 
+        stdout=subprocess.PIPE, 
+        stderr=subprocess.STDOUT, 
+        text=True,
+        bufsize=1
+    )
+    
+    output_lines = []
+    for line in process.stdout:
+        print(line, end="")  # Instantly prints to terminal
+        output_lines.append(line)
+        
+    process.wait(timeout=timeout)
+    full_output = "".join(output_lines)
+    
+    print(f"\n --- FINISHED COMMAND (Exit Code: {process.returncode}) ---\n")
+    
+    if process.returncode != 0:
+        short_output = full_output[-2000:] if len(full_output) > 2000 else full_output
+        raise RuntimeError(f"{args[0]} failed (exit {process.returncode}): {short_output}")
+        
+    return full_output
 
 
 def _provision_cluster(cluster_id: str, job_id: str):
@@ -113,7 +138,11 @@ def _provision_cluster(cluster_id: str, job_id: str):
 
         env = os.environ.copy()
         env['ANSIBLE_CONFIG'] = os.path.join(config.ANSIBLE_DIR, 'ansible.cfg')
+        
+        # Hardened SSH connection for firewall drops
         env['ANSIBLE_HOST_KEY_CHECKING'] = 'False'
+        env['ANSIBLE_SSH_ARGS'] = '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o ConnectTimeout=60'
+        env['ANSIBLE_RETRIES'] = '3'
 
         logger.info("[%s] ansible-playbook", cluster_id)
         _run_cmd(['ansible-playbook', '-i', inventory, site_yml], cwd=config.ANSIBLE_DIR, env=env, timeout=3600)
@@ -123,6 +152,7 @@ def _provision_cluster(cluster_id: str, job_id: str):
         logger.info("[%s] provisioning complete", cluster_id)
 
     except Exception as e:
+        print(f"\n[!!!] CRITICAL PROVISIONING ERROR: {e}\n")
         logger.error("[%s] provisioning failed: %s", cluster_id, e)
         _update_job(job_id, 'failed', str(e))
         _update_cluster(cluster_id, 'failed')
@@ -154,6 +184,7 @@ def _destroy_cluster(cluster_id: str, job_id: str):
         logger.info("[%s] destruction complete", cluster_id)
 
     except Exception as e:
+        print(f"\n[!!!] CRITICAL DESTRUCTION ERROR: {e}\n")
         logger.error("[%s] destruction failed: %s", cluster_id, e)
         _update_job(job_id, 'failed', str(e))
         _update_cluster(cluster_id, 'failed')
