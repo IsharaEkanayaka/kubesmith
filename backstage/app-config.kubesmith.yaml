@@ -1,0 +1,20 @@
+# Merge this into your Backstage app-config.yaml (or app-config.local.yaml for secrets)
+
+kubesmith:
+  baseUrl: http://your-kubesmith-api:8000   # kubesmith FastAPI URL
+  username: admin                            # service account username
+  password: ${KUBESMITH_PASSWORD}            # injected from env / Vault
+
+catalog:
+  locations:
+    # Register the deploy-app template so it appears in the Create menu
+    - type: url
+      target: https://github.com/your-org/kubesmith/blob/main/backstage/templates/deploy-app/template.yaml
+      rules:
+        - allow: [Template]
+
+    # Or use a local file path during development:
+    # - type: file
+    #   target: ../../backstage/templates/deploy-app/template.yaml
+    #   rules:
+    #     - allow: [Template]

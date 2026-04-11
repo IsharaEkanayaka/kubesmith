@@ -33,8 +33,11 @@ def _require_running_cluster(db, cluster_id: str):
 @router.post("/clusters/{cluster_id}/namespaces", status_code=201, response_model=NamespaceDetail)
 def create_namespace(cluster_id: str, req: CreateNamespaceRequest, user: dict = Depends(require_team_lead)):
     check_resource_access(user, "cluster", cluster_id, need_write=True)
-    if req.name in RESERVED_NAMESPACES:
-        raise APIError("bad_request", f"'{req.name}' is a reserved namespace", 400)
+
+    ns_name = f"{req.project}-{req.stage}"
+
+    if ns_name in RESERVED_NAMESPACES:
+        raise APIError("bad_request", f"'{ns_name}' is a reserved namespace", 400)
 
     db = get_db()
     try:
@@ -42,24 +45,28 @@ def create_namespace(cluster_id: str, req: CreateNamespaceRequest, user: dict = 
 
         existing = db.execute(
             "SELECT 1 FROM namespaces WHERE cluster_id=? AND name=? AND status='active'",
-            (cluster_id, req.name),
+            (cluster_id, ns_name),
         ).fetchone()
         if existing:
-            raise APIError("conflict", f"namespace '{req.name}' already exists in this cluster", 409)
+            raise APIError("conflict", f"namespace '{ns_name}' already exists in this cluster", 409)
 
         try:
-            run_kubectl(cluster_id, ["create", "namespace", req.name])
+            run_kubectl(cluster_id, ["create", "namespace", ns_name])
         except Exception as e:
             raise APIError("internal", f"failed to create namespace on cluster: {e}", 500)
 
         ns_id = _gen_id("ns")
         now = datetime.now(timezone.utc).isoformat()
         db.execute(
-            "INSERT INTO namespaces (id,cluster_id,name,status,created_at) VALUES (?,?,?,'active',?)",
-            (ns_id, cluster_id, req.name, now),
+            "INSERT INTO namespaces (id,cluster_id,name,project,stage,status,created_at) VALUES (?,?,?,?,?,'active',?)",
+            (ns_id, cluster_id, ns_name, req.project, req.stage, now),
         )
         db.commit()
-        return NamespaceDetail(id=ns_id, cluster_id=cluster_id, name=req.name, status="active", created_at=now)
+        return NamespaceDetail(
+            id=ns_id, cluster_id=cluster_id, name=ns_name,
+            project=req.project, stage=req.stage,
+            status="active", created_at=now,
+        )
     finally:
         db.close()
 
@@ -78,8 +85,11 @@ def list_namespaces(cluster_id: str, user: dict = Depends(require_viewer)):
             (cluster_id,),
         ).fetchall()
         return [
-            NamespaceDetail(id=r["id"], cluster_id=r["cluster_id"], name=r["name"],
-                            status=r["status"], created_at=r["created_at"])
+            NamespaceDetail(
+                id=r["id"], cluster_id=r["cluster_id"], name=r["name"],
+                project=r["project"], stage=r["stage"],
+                status=r["status"], created_at=r["created_at"],
+            )
             for r in rows
         ]
     finally:
@@ -97,8 +107,11 @@ def get_namespace(cluster_id: str, ns_id: str, user: dict = Depends(require_view
         ).fetchone()
         if not r:
             raise APIError("not_found", "namespace not found", 404)
-        return NamespaceDetail(id=r["id"], cluster_id=r["cluster_id"], name=r["name"],
-                               status=r["status"], created_at=r["created_at"])
+        return NamespaceDetail(
+            id=r["id"], cluster_id=r["cluster_id"], name=r["name"],
+            project=r["project"], stage=r["stage"],
+            status=r["status"], created_at=r["created_at"],
+        )
     finally:
         db.close()
 

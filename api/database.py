@@ -100,10 +100,29 @@ def _migrate(conn: sqlite3.Connection):
     # Check if grafana_password column exists
     cursor = conn.execute("PRAGMA table_info(clusters)")
     columns = [row['name'] for row in cursor.fetchall()]
-    
+
     if 'grafana_password' not in columns:
         logger.info("Migration: Adding grafana_password column to clusters table")
         conn.execute("ALTER TABLE clusters ADD COLUMN grafana_password TEXT")
+
+    # Add project and stage columns to namespaces
+    cursor = conn.execute("PRAGMA table_info(namespaces)")
+    ns_columns = [row['name'] for row in cursor.fetchall()]
+
+    if 'project' not in ns_columns:
+        logger.info("Migration: Adding project column to namespaces table")
+        conn.execute("ALTER TABLE namespaces ADD COLUMN project TEXT")
+    if 'stage' not in ns_columns:
+        logger.info("Migration: Adding stage column to namespaces table")
+        conn.execute("ALTER TABLE namespaces ADD COLUMN stage TEXT")
+
+    # Add role column to permissions (stores per-environment effective role)
+    cursor = conn.execute("PRAGMA table_info(permissions)")
+    perm_columns = [row['name'] for row in cursor.fetchall()]
+
+    if 'role' not in perm_columns:
+        logger.info("Migration: Adding role column to permissions table")
+        conn.execute("ALTER TABLE permissions ADD COLUMN role TEXT")
 
     # Drop UNIQUE constraint on clusters.name if it still exists
     row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='clusters'").fetchone()

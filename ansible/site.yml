@@ -71,3 +71,68 @@
         src: /home/ubuntu/.kube/config
         dest: ~/.kube/config
         flat: yes
+
+- name: Install kubesmith operator
+  hosts: control_plane
+  become: false
+  vars:
+    operator_image: "docker.io/kubesmith/kubesmith-operator:latest"
+    operator_ns: kubesmith-system
+  tasks:
+    - name: Copy AppDeployment CRD manifest
+      copy:
+        src: "{{ playbook_dir }}/../../../kubesmith-operator/config/crd/bases/kubesmith.io_appdeployments.yaml"
+        dest: /tmp/kubesmith-crd-appdeployments.yaml
+
+    - name: Copy AppMonitor CRD manifest
+      copy:
+        src: "{{ playbook_dir }}/../../../kubesmith-operator/config/crd/bases/kubesmith.io_appmonitors.yaml"
+        dest: /tmp/kubesmith-crd-appmonitors.yaml
+
+    - name: Apply CRDs
+      command: "kubectl apply -f /tmp/kubesmith-crd-appdeployments.yaml -f /tmp/kubesmith-crd-appmonitors.yaml"
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Create operator namespace
+      command: kubectl create namespace {{ operator_ns }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Copy RBAC manifests
+      copy:
+        src: "{{ playbook_dir }}/../../../kubesmith-operator/config/rbac/"
+        dest: /tmp/kubesmith-rbac/
+
+    - name: Apply ServiceAccount and RBAC
+      command: kubectl apply -f /tmp/kubesmith-rbac/
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Deploy operator controller manager
+      command: >
+        kubectl apply -f {{ playbook_dir }}/../../../kubesmith-operator/config/manager/manager.yaml
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Set operator image
+      command: >
+        kubectl set image deployment/kubesmith-operator-controller-manager
+        manager={{ operator_image }}
+        -n {{ operator_ns }}
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Wait for operator to become ready
+      command: >
+        kubectl rollout status deployment/kubesmith-operator-controller-manager
+        -n {{ operator_ns }} --timeout=120s
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+      register: operator_rollout
+      failed_when: operator_rollout.rc != 0
+      ignore_errors: true
+
+    - name: Show operator rollout result
+      debug:
+        msg: "{{ operator_rollout.stdout_lines | default(['(no output)']) }}"

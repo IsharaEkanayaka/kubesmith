@@ -19,11 +19,18 @@ def _get_control_plane_ip(cluster_id: str) -> str:
         db.close()
 
 
-def run_kubectl(cluster_id: str, args: list[str], timeout: int = 30) -> str:
-    """Run a kubectl command on the cluster's control plane via Paramiko SSH through a Jump Host."""
+def run_kubectl(cluster_id: str, args: list[str], timeout: int = 30, stdin_data: str | None = None) -> str:
+    """Run a kubectl command on the cluster's control plane via Paramiko SSH through a Jump Host.
+
+    Args:
+        cluster_id:  The cluster to target.
+        args:        kubectl argument list (e.g. ["apply", "-f", "-"]).
+        timeout:     Per-operation socket timeout in seconds.
+        stdin_data:  Optional text to write to the command's stdin (e.g. a YAML manifest).
+    """
     ip = _get_control_plane_ip(cluster_id)
     base = config.read_base_tfvars()
-    
+
     # Target VM credentials
     target_user = base.get("ssh_user", "ubuntu")
     target_password = base.get("ssh_password", config.CLUSTER_SSH_PASSWORD)
@@ -65,8 +72,11 @@ def run_kubectl(cluster_id: str, args: list[str], timeout: int = 30) -> str:
             timeout=10
         )
 
-        #Execute the command on the target VM
-        _, stdout, stderr = target_client.exec_command(cmd, timeout=timeout)
+        # Execute the command on the target VM
+        stdin, stdout, stderr = target_client.exec_command(cmd, timeout=timeout)
+        if stdin_data is not None:
+            stdin.write(stdin_data.encode())
+            stdin.channel.shutdown_write()
         exit_code = stdout.channel.recv_exit_status()
         out = stdout.read().decode().strip()
         err = stderr.read().decode().strip()

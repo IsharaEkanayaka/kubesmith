@@ -58,6 +58,16 @@
   .badge-creating, .badge-pending { background: rgba(234,179,8,.15); color: var(--yellow); }
   .badge-error, .badge-failed { background: rgba(239,68,68,.15); color: var(--red); }
   .badge-deleting, .badge-deleted { background: rgba(148,163,184,.15); color: var(--muted); }
+  .badge-installing, .badge-deploying { background: rgba(234,179,8,.15); color: var(--yellow); }
+  .badge-degraded { background: rgba(249,115,22,.15); color: #f97316; }
+  .badge-removing, .badge-removed { background: rgba(148,163,184,.15); color: var(--muted); }
+  .badge-healthy { background: rgba(34,197,94,.15); color: var(--green); }
+  .badge-unknown { background: rgba(148,163,184,.15); color: var(--muted); }
+
+  /* Modal wide variant for YAML/values content */
+  .modal-wide { min-width: 580px; max-width: 700px; }
+  .modal textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: var(--radius); font-size: 12px; font-family: monospace; min-height: 120px; resize: vertical; }
+  .modal textarea:focus { outline: none; border-color: var(--primary); }
 
   /* Modal */
   .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
@@ -141,6 +151,7 @@
       <li data-page="clusters" class="active"><span class="icon">&#9679;</span> Clusters</li>
       <li data-page="environments"><span class="icon">&#9670;</span> Environments</li>
       <li data-page="namespaces"><span class="icon">&#9644;</span> Namespaces</li>
+      <li data-page="deployments"><span class="icon">&#9654;</span> Deployments</li>
       <li data-page="jobs"><span class="icon">&#8635;</span> Jobs</li>
       <li data-page="users"><span class="icon">&#9786;</span> Users</li>
       <li data-page="permissions"><span class="icon">&#9919;</span> Permissions</li>
@@ -188,6 +199,23 @@
           </select>
         </div>
         <div id="nsTable"></div>
+      </div>
+    </div>
+
+    <!-- Deployments -->
+    <div id="page-deployments" class="page hidden">
+      <div class="page-header">
+        <h2>Deployments</h2>
+        <button class="btn btn-primary" onclick="showCreateDeployment()">+ Deploy App</button>
+      </div>
+      <div class="card">
+        <div style="margin-bottom:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <label style="font-size:13px; color:var(--muted);">Cluster:</label>
+          <select id="depClusterSelect" style="background:var(--bg); border:1px solid var(--border); color:var(--text); padding:6px 10px; border-radius:var(--radius); font-size:13px;" onchange="loadDeployments()">
+            <option value="">Select a cluster...</option>
+          </select>
+        </div>
+        <div id="depContent"></div>
       </div>
     </div>
 
@@ -285,8 +313,9 @@ function timeAgo(iso) {
   return d.toLocaleString();
 }
 
-function showModal(html) {
-  document.getElementById('modalContainer').innerHTML = `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">${html}</div></div>`;
+function showModal(html, wide = false) {
+  const cls = wide ? 'modal modal-wide' : 'modal';
+  document.getElementById('modalContainer').innerHTML = `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="${cls}">${html}</div></div>`;
 }
 
 function closeModal() {
@@ -299,7 +328,7 @@ function emptyState(msg) {
 
 // ─── Navigation ───
 
-const pages = ['clusters', 'environments', 'namespaces', 'jobs', 'users', 'permissions'];
+const pages = ['clusters', 'environments', 'namespaces', 'deployments', 'jobs', 'users', 'permissions'];
 
 document.getElementById('nav').addEventListener('click', (e) => {
   const li = e.target.closest('li[data-page]');
@@ -318,6 +347,7 @@ function loadPage(page) {
     case 'clusters': loadClusters(); break;
     case 'environments': loadEnvironments(); break;
     case 'namespaces': loadNsClusterList(); break;
+    case 'deployments': loadDepClusterList(); break;
     case 'jobs': break;
     case 'users': loadUsers(); break;
     case 'permissions': loadPermUserList(); break;
@@ -663,7 +693,7 @@ function goToJob(jobId) {
   document.querySelectorAll('.nav li').forEach(n => n.classList.remove('active'));
   const jobNav = document.querySelector('.nav li[data-page="jobs"]');
   if (jobNav) jobNav.classList.add('active');
-  const pages = ['clusters', 'environments', 'namespaces', 'jobs', 'users', 'permissions'];
+  const pages = ['clusters', 'environments', 'namespaces', 'deployments', 'jobs', 'users', 'permissions'];
   pages.forEach(p => {
     document.getElementById(`page-${p}`).classList.toggle('hidden', p !== 'jobs');
   });
@@ -848,6 +878,307 @@ async function revokePerm(id) {
     toast('Permission revoked');
     loadPermissions();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+
+// ──────────────────────────────────────────────
+//  DEPLOYMENTS  (AppDeployment + AppMonitor CRs)
+// ──────────────────────────────────────────────
+
+let _depPollTimer = null;
+let _depDrillDown = null; // { cid, name, namespace, view: 'pods'|'monitor' }
+
+async function loadDepClusterList() {
+  const sel = document.getElementById('depClusterSelect');
+  const prev = sel.value;
+  try {
+    const clusters = await apiFetch('/clusters');
+    sel.innerHTML = '<option value="">Select a cluster...</option>' +
+      clusters.filter(c => c.status === 'running').map(c =>
+        `<option value="${c.id}" ${c.id === prev ? 'selected' : ''}>${esc(c.name)} (${c.id})</option>`
+      ).join('');
+    if (sel.value) loadDeployments();
+    else document.getElementById('depContent').innerHTML = emptyState('Select a running cluster');
+  } catch (e) {
+    document.getElementById('depContent').innerHTML = emptyState(e.message);
+  }
+}
+
+async function loadDeployments() {
+  const cid = document.getElementById('depClusterSelect').value;
+  const el = document.getElementById('depContent');
+  if (!cid) { el.innerHTML = emptyState('Select a cluster'); return; }
+  _depDrillDown = null;
+  _stopDepPoll();
+  try {
+    const data = await apiFetch(`/clusters/${encodeURIComponent(cid)}/deployments`);
+    if (!data.length) { el.innerHTML = emptyState('No deployments in this cluster'); return; }
+    el.innerHTML = `<table>
+      <tr><th>Name</th><th>Namespace</th><th>Type</th><th>Chart</th><th>Phase</th><th>Pods</th><th>Created</th><th></th></tr>
+      ${data.map(d => `<tr>
+        <td>${esc(d.name)}</td>
+        <td class="mono">${esc(d.namespace)}</td>
+        <td><span class="badge badge-active">${esc(d.deploy_type)}</span></td>
+        <td class="mono" style="font-size:11px">${d.deploy_type === 'helm' ? esc(d.chart_name || '') : '(yaml)'}</td>
+        <td>${depPhaseBadge(d.phase)}</td>
+        <td style="font-size:12px">${d.ready_pods}/${d.total_pods}</td>
+        <td style="font-size:12px; color:var(--muted)">${timeAgo(d.created_at)}</td>
+        <td style="display:flex; gap:4px; flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="viewDepPods('${cid}','${esc(d.name)}','${esc(d.namespace)}')">Pods</button>
+          <button class="btn btn-sm" style="background:var(--cyan);color:#fff" onclick="showCreateMonitor('${cid}','${esc(d.name)}','${esc(d.namespace)}')">Monitor</button>
+          <button class="btn btn-danger btn-sm" onclick="removeDeployment('${cid}','${esc(d.name)}','${esc(d.namespace)}')">Remove</button>
+        </td>
+      </tr>`).join('')}
+    </table>`;
+    if (data.some(d => ['Installing', 'Removing'].includes(d.phase))) _startDepPoll();
+  } catch (e) { el.innerHTML = emptyState(e.message); }
+}
+
+function depPhaseBadge(phase) {
+  const map = {
+    Installing: 'installing', Running: 'running', Degraded: 'degraded',
+    Failed: 'failed', Removing: 'removing', Removed: 'removed'
+  };
+  const cls = map[phase] || 'unknown';
+  return `<span class="badge badge-${cls}">${phase}</span>`;
+}
+
+function _startDepPoll() {
+  if (!_depPollTimer) {
+    _depPollTimer = setInterval(() => {
+      if (currentPage() !== 'deployments') return;
+      if (_depDrillDown) refreshDepDrillDown();
+      else loadDeployments();
+    }, 5000);
+  }
+}
+function _stopDepPoll() {
+  if (_depPollTimer) { clearInterval(_depPollTimer); _depPollTimer = null; }
+}
+
+function showCreateDeployment() {
+  const cid = document.getElementById('depClusterSelect').value;
+  if (!cid) { toast('Select a cluster first', 'error'); return; }
+  showModal(`
+    <h3>Deploy Application</h3>
+    <div class="form-group"><label>Namespace</label><input id="m-dep-ns" value="default" /></div>
+    <div class="form-group"><label>App Name</label><input id="m-dep-name" placeholder="my-app" /></div>
+    <div class="form-group">
+      <label>Deploy Type</label>
+      <select id="m-dep-type" onchange="toggleDepType()">
+        <option value="helm">Helm Chart</option>
+        <option value="manifest">K8s Manifest (YAML)</option>
+      </select>
+    </div>
+    <div id="m-dep-helm-section">
+      <div class="form-group"><label>Chart Repository URL</label><input id="m-dep-repo" placeholder="https://charts.bitnami.com/bitnami" /></div>
+      <div class="form-group"><label>Chart Name</label><input id="m-dep-chart" placeholder="nginx" /></div>
+      <div class="form-group"><label>Version <span style="color:var(--muted)">(optional)</span></label><input id="m-dep-ver" placeholder="latest" /></div>
+      <div class="form-group"><label>Values YAML <span style="color:var(--muted)">(optional)</span></label>
+        <textarea id="m-dep-values" placeholder="replicaCount: 2&#10;service:&#10;  type: ClusterIP"></textarea>
+      </div>
+    </div>
+    <div id="m-dep-manifest-section" class="hidden">
+      <div class="form-group"><label>Manifest YAML</label>
+        <textarea id="m-dep-yaml" style="min-height:180px" placeholder="apiVersion: apps/v1&#10;kind: Deployment&#10;..."></textarea>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="deployApp('${cid}')">Deploy</button>
+    </div>
+  `, true);
+}
+
+function toggleDepType() {
+  const t = document.getElementById('m-dep-type').value;
+  document.getElementById('m-dep-helm-section').classList.toggle('hidden', t !== 'helm');
+  document.getElementById('m-dep-manifest-section').classList.toggle('hidden', t !== 'manifest');
+}
+
+async function deployApp(cid) {
+  try {
+    const namespace = document.getElementById('m-dep-ns').value.trim() || 'default';
+    const name = document.getElementById('m-dep-name').value.trim();
+    const deploy_type = document.getElementById('m-dep-type').value;
+    if (!name) { toast('App name is required', 'error'); return; }
+    const body = { name, namespace, deploy_type };
+    if (deploy_type === 'helm') {
+      body.chart_repo = document.getElementById('m-dep-repo').value.trim();
+      body.chart_name = document.getElementById('m-dep-chart').value.trim();
+      body.chart_version = document.getElementById('m-dep-ver').value.trim() || null;
+      body.values_override = document.getElementById('m-dep-values').value.trim() || null;
+      if (!body.chart_repo || !body.chart_name) { toast('Chart repo and name are required', 'error'); return; }
+    } else {
+      body.manifest = document.getElementById('m-dep-yaml').value.trim();
+      if (!body.manifest) { toast('Manifest YAML is required', 'error'); return; }
+    }
+    await apiFetch(`/clusters/${encodeURIComponent(cid)}/deployments`, { method: 'POST', body });
+    toast('Deployment started — operator is reconciling');
+    closeModal();
+    loadDeployments();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function removeDeployment(cid, name, ns) {
+  if (!confirm(`Remove deployment "${name}" from namespace "${ns}"?`)) return;
+  try {
+    await apiFetch(`/clusters/${encodeURIComponent(cid)}/deployments/${encodeURIComponent(name)}?namespace=${encodeURIComponent(ns)}`, { method: 'DELETE' });
+    toast('Deployment removed');
+    loadDeployments();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Pod drill-down ───────────────────────────────────────────────────────────
+
+function viewDepPods(cid, name, ns) {
+  _depDrillDown = { cid, name, namespace: ns, view: 'pods' };
+  refreshDepDrillDown();
+  _startDepPoll();
+}
+
+async function refreshDepDrillDown() {
+  if (!_depDrillDown) return;
+  const { cid, name, namespace } = _depDrillDown;
+  const el = document.getElementById('depContent');
+
+  // Re-fetch the deployment status
+  let depPhase = '';
+  try {
+    const dep = await apiFetch(`/clusters/${encodeURIComponent(cid)}/deployments/${encodeURIComponent(name)}?namespace=${encodeURIComponent(namespace)}`);
+    depPhase = dep.phase;
+  } catch (_) {}
+
+  try {
+    const data = await apiFetch(`/clusters/${encodeURIComponent(cid)}/deployments/${encodeURIComponent(name)}/pods?namespace=${encodeURIComponent(namespace)}`);
+    const pods = data.pods || [];
+    el.innerHTML = `
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px; flex-wrap:wrap;">
+        <button class="btn btn-cancel btn-sm" onclick="_depDrillDown=null; _stopDepPoll(); loadDeployments()">← Back</button>
+        <span style="font-size:13px; color:var(--muted)">Pods for <strong style="color:var(--text)">${esc(name)}</strong>
+          in <code style="color:var(--cyan); font-size:11px">${esc(namespace)}</code></span>
+        ${depPhase ? depPhaseBadge(depPhase) : ''}
+        <div class="spinner" style="margin-left:auto;"></div>
+      </div>
+      ${pods.length === 0 ? emptyState('No pods found (operator may still be deploying)') : `
+        <table>
+          <tr><th>Pod Name</th><th>Phase</th><th>Ready</th><th>Restarts</th><th>Node IP</th><th>Started</th><th></th></tr>
+          ${pods.map(p => `<tr>
+            <td class="mono" style="font-size:11px">${esc(p.name)}</td>
+            <td>${podPhaseBadge(p.phase)}</td>
+            <td>${p.ready ? '<span style="color:var(--green)">Yes</span>' : '<span style="color:var(--yellow)">No</span>'}</td>
+            <td>${p.restarts}</td>
+            <td class="mono" style="font-size:11px; color:var(--muted)">${esc(p.node || '—')}</td>
+            <td style="font-size:12px; color:var(--muted)">${p.started_at ? timeAgo(p.started_at) : '—'}</td>
+            <td><button class="btn btn-primary btn-sm" onclick="viewPodLogs('${cid}','${esc(name)}','${esc(namespace)}','${esc(p.name)}')">Logs</button></td>
+          </tr>`).join('')}
+        </table>
+      `}`;
+  } catch (e) {
+    el.innerHTML = `<div style="margin-bottom:12px">
+      <button class="btn btn-cancel btn-sm" onclick="_depDrillDown=null;_stopDepPoll();loadDeployments()">← Back</button>
+    </div>${emptyState('Failed to load pods: ' + e.message)}`;
+  }
+}
+
+function podPhaseBadge(phase) {
+  const map = { Running: 'running', Pending: 'creating', Succeeded: 'active', Failed: 'failed' };
+  const cls = map[phase] || 'unknown';
+  return `<span class="badge badge-${cls}">${phase}</span>`;
+}
+
+async function viewPodLogs(cid, depName, ns, podName) {
+  showModal(`
+    <h3>Logs — ${esc(podName)}</h3>
+    <div id="logContent" style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; font-family:monospace; font-size:11px; max-height:420px; overflow-y:auto; white-space:pre-wrap; color:var(--text);">Loading…</div>
+    <div class="actions" style="margin-top:10px;">
+      <button class="btn btn-cancel" onclick="closeModal()">Close</button>
+      <button class="btn btn-primary" onclick="refreshPodLogs('${cid}','${depName}','${ns}','${podName}')">Refresh</button>
+    </div>
+  `, true);
+  refreshPodLogs(cid, depName, ns, podName);
+}
+
+async function refreshPodLogs(cid, depName, ns, podName) {
+  const el = document.getElementById('logContent');
+  if (!el) return;
+  try {
+    const data = await apiFetch(
+      `/clusters/${encodeURIComponent(cid)}/deployments/${encodeURIComponent(depName)}/pods/${encodeURIComponent(podName)}/logs?namespace=${encodeURIComponent(ns)}&tail=200`
+    );
+    el.textContent = data.logs || '(no logs)';
+    el.scrollTop = el.scrollHeight;
+  } catch (e) { el.textContent = 'Error: ' + e.message; }
+}
+
+// ── AppMonitor ───────────────────────────────────────────────────────────────
+
+function showCreateMonitor(cid, depName, ns) {
+  showModal(`
+    <h3>Enable Monitoring — ${esc(depName)}</h3>
+    <p style="font-size:12px; color:var(--muted); margin-bottom:14px;">Creates an AppMonitor CR which configures a Prometheus ServiceMonitor and optional alert rules on the cluster.</p>
+    <div class="form-group"><label>Monitor Name</label><input id="m-mon-name" value="${esc(depName)}-monitor" /></div>
+    <div class="form-group"><label>Metrics Port</label><input id="m-mon-port" placeholder="http (or port number)" /></div>
+    <div class="form-group"><label>Metrics Path</label><input id="m-mon-path" placeholder="/metrics" /></div>
+    <div class="form-group"><label>Scrape Interval</label><input id="m-mon-interval" placeholder="30s" /></div>
+    <div class="form-group">
+      <label>Alert Rules YAML <span style="color:var(--muted)">(optional — list of name/expr/severity)</span></label>
+      <textarea id="m-mon-alerts" placeholder="- name: HighRestarts&#10;  expr: kube_pod_container_status_restarts_total > 5&#10;  severity: warning&#10;  summary: Too many restarts"></textarea>
+    </div>
+    <div class="actions">
+      <button class="btn btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="createMonitor('${cid}','${esc(depName)}','${esc(ns)}')">Enable</button>
+    </div>
+  `, true);
+}
+
+async function createMonitor(cid, depName, ns) {
+  try {
+    const name = document.getElementById('m-mon-name').value.trim();
+    const port = document.getElementById('m-mon-port').value.trim() || null;
+    const path = document.getElementById('m-mon-path').value.trim() || null;
+    const interval = document.getElementById('m-mon-interval').value.trim() || null;
+    const alertsYaml = document.getElementById('m-mon-alerts').value.trim();
+
+    let alerts = null;
+    if (alertsYaml) {
+      try { alerts = jsyaml_parse(alertsYaml); }
+      catch (_) { toast('Alert rules YAML is invalid', 'error'); return; }
+    }
+
+    await apiFetch(`/clusters/${encodeURIComponent(cid)}/monitors`, {
+      method: 'POST',
+      body: {
+        name, namespace: ns, app_deployment_ref: depName,
+        metrics_enabled: true,
+        metrics_port: port, metrics_path: path, metrics_interval: interval,
+        alerts
+      }
+    });
+    toast('AppMonitor created — ServiceMonitor will be provisioned shortly');
+    closeModal();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Minimal YAML list parser for alert rules (avoids a full YAML library dep).
+// Handles simple "- key: value" lists well enough for our use-case.
+function jsyaml_parse(text) {
+  // Try JSON first (covers [] syntax)
+  try { return JSON.parse(text); } catch (_) {}
+  // Simple YAML list parser
+  const items = [];
+  let current = null;
+  for (const line of text.split('\n')) {
+    const listMatch = line.match(/^-\s+(\w+):\s*(.*)/);
+    const propMatch = line.match(/^\s+(\w+):\s*(.*)/);
+    if (listMatch) {
+      current = { [listMatch[1]]: listMatch[2].trim() };
+      items.push(current);
+    } else if (propMatch && current) {
+      current[propMatch[1]] = propMatch[2].trim();
+    }
+  }
+  return items.length ? items : null;
 }
 
 

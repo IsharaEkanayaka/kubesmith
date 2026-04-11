@@ -4,6 +4,7 @@ from typing import Optional
 
 from fastapi import Depends, Request
 
+
 from .database import get_db
 from .errors import APIError
 
@@ -84,23 +85,86 @@ def require_role(*allowed_roles: str):
     return checker
 
 
-def check_resource_access(user: dict, resource_type: str, resource_id: str, need_write: bool = False):
-    """Check if user has permission on a specific resource. Admins bypass all checks."""
+def _get_parent_environment_id(resource_type: str, resource_id: str, db) -> Optional[str]:
+    """Walk up the resource hierarchy to find the parent environment id."""
+    if resource_type == "cluster":
+        row = db.execute(
+            "SELECT environment_id FROM clusters WHERE id=? AND status!='deleted'", (resource_id,)
+        ).fetchone()
+        return row["environment_id"] if row else None
+    if resource_type == "namespace":
+        row = db.execute(
+            "SELECT c.environment_id FROM namespaces n "
+            "JOIN clusters c ON n.cluster_id = c.id WHERE n.id=?",
+            (resource_id,),
+        ).fetchone()
+        return row["environment_id"] if row else None
+    return None
+
+
+def _resolve_permission(user_id: str, resource_type: str, resource_id: str, db) -> Optional[dict]:
+    """
+    Return the most specific permission dict {access, role} for the user on this resource.
+    Checks direct permission first, then walks up to the parent environment.
+    """
+    perm = db.execute(
+        "SELECT access, role FROM permissions WHERE user_id=? AND resource_type=? AND resource_id=?",
+        (user_id, resource_type, resource_id),
+    ).fetchone()
+    if perm:
+        return dict(perm)
+
+    env_id = _get_parent_environment_id(resource_type, resource_id, db)
+    if env_id:
+        perm = db.execute(
+            "SELECT access, role FROM permissions "
+            "WHERE user_id=? AND resource_type='environment' AND resource_id=?",
+            (user_id, env_id),
+        ).fetchone()
+        if perm:
+            return dict(perm)
+
+    return None
+
+
+def check_resource_access(
+    user: dict,
+    resource_type: str,
+    resource_id: str,
+    need_write: bool = False,
+    need_role: Optional[str] = None,
+):
+    """
+    Check if user has access to a resource.
+
+    - Admins bypass all checks.
+    - Walks up the hierarchy: direct permission → parent environment permission.
+    - need_write=True  : permission must have access='write'.
+    - need_role=<role> : effective role (permission role or global role fallback)
+                         must meet or exceed the required role.
+    """
     if user["role"] == "admin":
         return
 
     db = get_db()
     try:
-        perm = db.execute(
-            "SELECT access FROM permissions WHERE user_id=? AND resource_type=? AND resource_id=?",
-            (user["id"], resource_type, resource_id),
-        ).fetchone()
+        perm = _resolve_permission(user["id"], resource_type, resource_id, db)
 
         if not perm:
             raise APIError("forbidden", f"no access to {resource_type} {resource_id}", 403)
 
         if need_write and perm["access"] != "write":
             raise APIError("forbidden", f"write access required for {resource_type} {resource_id}", 403)
+
+        if need_role:
+            # Effective role = permission-level role (if set) else global user role
+            effective = perm["role"] if perm.get("role") else user["role"]
+            if ROLE_HIERARCHY.get(effective, 0) < ROLE_HIERARCHY.get(need_role, 0):
+                raise APIError(
+                    "forbidden",
+                    f"requires {need_role} role for {resource_type} {resource_id}",
+                    403,
+                )
     finally:
         db.close()
 

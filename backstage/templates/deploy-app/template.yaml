@@ -1,0 +1,167 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: deploy-app
+  title: Deploy Application to Cluster
+  description: Deploy a Helm chart or raw manifest to a kubesmith-managed Kubernetes cluster
+  tags:
+    - kubernetes
+    - deploy
+    - kubesmith
+spec:
+  owner: platform-team
+  type: deployment
+
+  parameters:
+    - title: Target
+      required: [clusterId, namespace, appName]
+      properties:
+        clusterId:
+          title: Cluster
+          type: string
+          description: ID of the kubesmith cluster to deploy to
+          ui:field: KubesmithClusterPicker
+        namespace:
+          title: Namespace
+          type: string
+          default: default
+          pattern: '^[a-z][a-z0-9-]*$'
+          description: Kubernetes namespace (lowercase, hyphens allowed)
+        appName:
+          title: Application Name
+          type: string
+          pattern: '^[a-z][a-z0-9-]*$'
+          description: Unique name for this deployment (lowercase, hyphens allowed)
+
+    - title: Deployment
+      required: [deployType]
+      properties:
+        deployType:
+          title: Deploy Type
+          type: string
+          default: helm
+          enum: [helm, manifest]
+          enumNames: ['Helm Chart', 'Raw YAML Manifest']
+
+        # --- Helm fields (shown only when deployType = helm) ---
+        chartRepo:
+          title: Helm Repository URL
+          type: string
+          description: 'e.g. https://charts.bitnami.com/bitnami'
+          ui:widget: uri
+        chartName:
+          title: Chart Name
+          type: string
+          description: 'e.g. nginx'
+        chartVersion:
+          title: Chart Version
+          type: string
+          description: Leave blank for latest
+        valuesOverride:
+          title: Values Override (YAML)
+          type: string
+          ui:widget: textarea
+          ui:options:
+            rows: 10
+          description: Optional Helm values to override (YAML format)
+
+        # --- Manifest fields (shown only when deployType = manifest) ---
+        manifest:
+          title: Manifest (YAML)
+          type: string
+          ui:widget: textarea
+          ui:options:
+            rows: 14
+          description: Raw Kubernetes YAML manifest (multi-document supported)
+
+      dependencies:
+        deployType:
+          oneOf:
+            - properties:
+                deployType:
+                  const: helm
+                chartRepo:
+                  type: string
+                chartName:
+                  type: string
+                chartVersion:
+                  type: string
+                valuesOverride:
+                  type: string
+              required: [chartRepo, chartName]
+            - properties:
+                deployType:
+                  const: manifest
+                manifest:
+                  type: string
+              required: [manifest]
+
+    - title: Monitoring (optional)
+      properties:
+        enableMonitoring:
+          title: Enable Prometheus Monitoring
+          type: boolean
+          default: false
+        metricsPort:
+          title: Metrics Port
+          type: string
+          description: Port the app exposes /metrics on (e.g. "8080")
+        metricsPath:
+          title: Metrics Path
+          type: string
+          default: /metrics
+        metricsInterval:
+          title: Scrape Interval
+          type: string
+          default: 30s
+          description: 'e.g. 30s, 1m'
+        alerts:
+          title: Alert Rules (YAML list)
+          type: string
+          ui:widget: textarea
+          ui:options:
+            rows: 10
+          description: |
+            Optional alert rules in YAML list format, e.g.:
+            - name: HighErrorRate
+              expr: 'rate(http_requests_total{status=~"5.."}[5m]) > 0.1'
+              for: 5m
+              severity: warning
+              summary: High error rate on {{ $labels.instance }}
+
+  steps:
+    - id: deploy
+      name: Create AppDeployment
+      action: kubesmith:deploy
+      input:
+        clusterId: ${{ parameters.clusterId }}
+        appName: ${{ parameters.appName }}
+        namespace: ${{ parameters.namespace }}
+        deployType: ${{ parameters.deployType }}
+        chartRepo: ${{ parameters.chartRepo }}
+        chartName: ${{ parameters.chartName }}
+        chartVersion: ${{ parameters.chartVersion }}
+        valuesOverride: ${{ parameters.valuesOverride }}
+        manifest: ${{ parameters.manifest }}
+
+    - id: monitor
+      name: Create AppMonitor
+      if: ${{ parameters.enableMonitoring }}
+      action: kubesmith:create-monitor
+      input:
+        clusterId: ${{ parameters.clusterId }}
+        appName: ${{ parameters.appName }}-monitor
+        namespace: ${{ parameters.namespace }}
+        appDeploymentRef: ${{ parameters.appName }}
+        metricsPort: ${{ parameters.metricsPort }}
+        metricsPath: ${{ parameters.metricsPath }}
+        metricsInterval: ${{ parameters.metricsInterval }}
+        alerts: ${{ parameters.alerts }}
+
+  output:
+    links:
+      - title: View in kubesmith
+        url: ${{ steps.deploy.output.dashboardUrl }}
+      - title: Deployment Details
+        icon: kubernetes
+        url: ${{ steps.deploy.output.detailUrl }}

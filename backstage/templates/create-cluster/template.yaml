@@ -1,0 +1,71 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: create-cluster
+  title: Provision a Kubernetes Cluster
+  description: Provision a new kubesmith-managed Kubernetes cluster on Proxmox for your team
+  tags:
+    - kubernetes
+    - infrastructure
+    - kubesmith
+spec:
+  owner: platform-team
+  type: infrastructure
+
+  parameters:
+    - title: Team & Purpose
+      required: [environmentId, tier]
+      properties:
+        environmentId:
+          title: Team Environment
+          type: string
+          description: The environment (team) this cluster belongs to
+          ui:field: KubesmithEnvironmentPicker
+        tier:
+          title: Cluster Tier
+          type: string
+          enum: [nonprod, prod]
+          enumNames: ['Non-Production  (dev + staging workloads)', 'Production  (live traffic only)']
+          description: >
+            nonprod — shared cluster for dev and staging namespaces, smaller VMs.
+            prod    — dedicated cluster for production workloads, properly sized.
+
+    - title: Cluster Spec
+      required: [clusterName, nodeCount]
+      properties:
+        clusterName:
+          title: Cluster Name
+          type: string
+          pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]*$'
+          description: >
+            Recommended convention: {team}-{tier}  e.g. biomedical-nonprod, servergroup-prod
+        nodeCount:
+          title: Total Node Count  (control plane + workers)
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 3
+          description: >
+            nonprod: 2–3 nodes is usually enough.
+            prod: 4+ recommended (1 control plane + 3 workers minimum).
+
+  steps:
+    - id: create-cluster
+      name: Provision Cluster
+      action: kubesmith:create-cluster
+      input:
+        environmentId: ${{ parameters.environmentId }}
+        clusterName: ${{ parameters.clusterName }}
+        nodeCount: ${{ parameters.nodeCount }}
+
+  output:
+    links:
+      - title: View cluster status
+        url: ${{ steps.create-cluster.output.dashboardUrl }}
+    text:
+      - title: Cluster details
+        content: |
+          **Cluster ID:** `${{ steps.create-cluster.output.clusterId }}`
+          **Job ID:** `${{ steps.create-cluster.output.jobId }}`
+
+          Provisioning takes ~5–10 minutes. Monitor progress in the kubesmith dashboard.

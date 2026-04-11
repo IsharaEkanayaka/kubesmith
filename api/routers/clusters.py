@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 
 from .. import config
-from ..auth import require_admin, require_viewer, check_resource_access
+from ..auth import require_admin, require_team_lead, require_viewer, check_resource_access
 from ..database import get_db
 from ..errors import APIError
 from ..models import (
@@ -54,11 +54,27 @@ def _row_to_detail(r, latest_job_id=None) -> ClusterDetail:
 # --- Cluster endpoints ---
 
 @router.post("/clusters", status_code=201, response_model=CreateClusterResponse)
-def create_cluster(req: CreateClusterRequest, user: dict = Depends(require_admin)):
+def create_cluster(req: CreateClusterRequest, user: dict = Depends(require_team_lead)):
+    # Admins can create clusters anywhere (environment_id optional).
+    # team_leads must supply an environment_id they have write + team_lead role on.
+    if user["role"] != "admin":
+        if not req.environment_id:
+            raise APIError("bad_request", "environment_id is required for non-admin users", 400)
+        check_resource_access(
+            user, "environment", req.environment_id,
+            need_write=True, need_role="team_lead",
+        )
+
     db = get_db()
     try:
         if db.execute("SELECT 1 FROM clusters WHERE name=? AND status!='deleted'", (req.name,)).fetchone():
             raise APIError("conflict", "cluster name already exists", 409)
+
+        if req.environment_id:
+            if not db.execute(
+                "SELECT 1 FROM environments WHERE id=? AND status!='deleted'", (req.environment_id,)
+            ).fetchone():
+                raise APIError("not_found", "environment not found", 404)
 
         cluster_id = _gen_id("clu")
         job_id = _gen_id("job")
@@ -69,9 +85,9 @@ def create_cluster(req: CreateClusterRequest, user: dict = Depends(require_admin
         ip_start = last["next_ip"] if last and last["next_ip"] else config.VM_IP_START
 
         db.execute(
-            "INSERT INTO clusters (id,name,node_count,control_plane_count,worker_count,status,ip_start,created_at)"
-            " VALUES (?,?,?,1,?,'creating',?,?)",
-            (cluster_id, req.name, req.node_count, worker_count, ip_start, now),
+            "INSERT INTO clusters (id,name,node_count,control_plane_count,worker_count,status,ip_start,environment_id,created_at)"
+            " VALUES (?,?,?,1,?,'creating',?,?,?)",
+            (cluster_id, req.name, req.node_count, worker_count, ip_start, req.environment_id, now),
         )
         db.execute(
             "INSERT INTO jobs (id,cluster_id,type,status,created_at) VALUES (?,?,'create','pending',?)",

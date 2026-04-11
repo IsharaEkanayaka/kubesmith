@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 from ..auth import require_admin, require_viewer, check_resource_access
 from ..database import get_db
 from ..errors import APIError
-from ..models import CreateEnvironmentRequest, EnvironmentDetail
+from ..models import CreateEnvironmentRequest, EnvironmentDetail, EnvironmentMemberDetail
 
 router = APIRouter()
 
@@ -68,6 +68,40 @@ def get_environment(env_id: str, user: dict = Depends(require_viewer)):
         if not r:
             raise APIError("not_found", "environment not found", 404)
         return _row_to_detail(db, r)
+    finally:
+        db.close()
+
+
+@router.get("/environments/{env_id}/members", response_model=list[EnvironmentMemberDetail])
+def list_members(env_id: str, user: dict = Depends(require_viewer)):
+    check_resource_access(user, "environment", env_id)
+    db = get_db()
+    try:
+        if not db.execute(
+            "SELECT 1 FROM environments WHERE id=? AND status!='deleted'", (env_id,)
+        ).fetchone():
+            raise APIError("not_found", "environment not found", 404)
+
+        rows = db.execute(
+            "SELECT u.id, u.username, u.name, u.role AS global_role, "
+            "       p.role AS environment_role, p.access "
+            "FROM permissions p "
+            "JOIN users u ON p.user_id = u.id "
+            "WHERE p.resource_type='environment' AND p.resource_id=? AND u.is_active=1 "
+            "ORDER BY u.name",
+            (env_id,),
+        ).fetchall()
+        return [
+            EnvironmentMemberDetail(
+                user_id=r["id"],
+                username=r["username"],
+                name=r["name"],
+                global_role=r["global_role"],
+                environment_role=r["environment_role"],
+                access=r["access"],
+            )
+            for r in rows
+        ]
     finally:
         db.close()
 

@@ -1,0 +1,18 @@
+{
+  "name": "@kubesmith/backstage-plugin-scaffolder-backend-module-kubesmith",
+  "version": "0.1.0",
+  "description": "Backstage scaffolder actions for kubesmith deployments",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@backstage/config": "^1.2.0",
+    "@backstage/plugin-scaffolder-node": "^0.4.0",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "typescript": "^5.0.0"
+  }
+}

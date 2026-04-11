@@ -20,6 +20,7 @@ from ..models import (
     PermissionDetail,
     UserDetail,
 )
+from ..auth import ROLE_HIERARCHY
 
 router = APIRouter()
 
@@ -118,27 +119,51 @@ def deactivate_user(user_id: str, user: dict = Depends(require_admin)):
 def grant_permission(req: GrantPermissionRequest, user: dict = Depends(require_admin)):
     db = get_db()
     try:
-        target = db.execute("SELECT 1 FROM users WHERE id=? AND is_active=1", (req.user_id,)).fetchone()
+        target = db.execute("SELECT * FROM users WHERE id=? AND is_active=1", (req.user_id,)).fetchone()
         if not target:
             raise APIError("not_found", "user not found", 404)
+
+        # role is only meaningful for environment permissions
+        if req.role and req.resource_type != "environment":
+            raise APIError("bad_request", "role can only be set for environment permissions", 400)
+
+        # role cannot exceed the target user's global role ceiling
+        if req.role:
+            ceiling = ROLE_HIERARCHY.get(target["role"], 0)
+            requested = ROLE_HIERARCHY.get(req.role, 0)
+            if requested > ceiling:
+                raise APIError(
+                    "bad_request",
+                    f"cannot grant role '{req.role}' — exceeds user's global ceiling '{target['role']}'",
+                    400,
+                )
 
         existing = db.execute(
             "SELECT id FROM permissions WHERE user_id=? AND resource_type=? AND resource_id=?",
             (req.user_id, req.resource_type, req.resource_id),
         ).fetchone()
         if existing:
-            db.execute("UPDATE permissions SET access=? WHERE id=?", (req.access, existing["id"]))
+            db.execute(
+                "UPDATE permissions SET access=?, role=? WHERE id=?",
+                (req.access, req.role, existing["id"]),
+            )
             db.commit()
-            return PermissionDetail(id=existing["id"], user_id=req.user_id,
-                                    resource_type=req.resource_type, resource_id=req.resource_id, access=req.access)
+            return PermissionDetail(
+                id=existing["id"], user_id=req.user_id,
+                resource_type=req.resource_type, resource_id=req.resource_id,
+                access=req.access, role=req.role,
+            )
 
         cursor = db.execute(
-            "INSERT INTO permissions (user_id,resource_type,resource_id,access) VALUES (?,?,?,?)",
-            (req.user_id, req.resource_type, req.resource_id, req.access),
+            "INSERT INTO permissions (user_id,resource_type,resource_id,access,role) VALUES (?,?,?,?,?)",
+            (req.user_id, req.resource_type, req.resource_id, req.access, req.role),
         )
         db.commit()
-        return PermissionDetail(id=cursor.lastrowid, user_id=req.user_id,
-                                resource_type=req.resource_type, resource_id=req.resource_id, access=req.access)
+        return PermissionDetail(
+            id=cursor.lastrowid, user_id=req.user_id,
+            resource_type=req.resource_type, resource_id=req.resource_id,
+            access=req.access, role=req.role,
+        )
     finally:
         db.close()
 
