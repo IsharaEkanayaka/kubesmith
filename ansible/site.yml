@@ -77,6 +77,35 @@
         dest: ~/.kube/config
         flat: yes
 
+- name: Install Argo CD
+  hosts: control_plane
+  become: false  # Running as 'ubuntu' so it uses the correct ~/.kube/config
+  tags: argocd
+  tasks:
+    - name: Ensure Helm is installed
+      become: true
+      command: /tmp/get_helm.sh
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Add Argo Helm repository
+      command: helm repo add argo https://argoproj.github.io/argo-helm
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Update Helm repositories
+      command: helm repo update
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Install Argo CD
+      command: >
+        helm upgrade --install argocd argo/argo-cd
+        --namespace argocd
+        --create-namespace
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
 - name: Install kubesmith operator
   hosts: control_plane
   become: false
