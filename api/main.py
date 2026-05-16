@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .database import init_db
 from .errors import APIError, api_error_handler
-from .routers import auth, clusters, deployments, environments, namespaces, users, monitor, applications
+from .routers import auth, clusters, environments, namespaces, users, monitor, applications
 
 STATIC_DIR = pathlib.Path(__file__).parent / "static"
 
@@ -56,7 +56,6 @@ app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(clusters.router, prefix="/api/v1", tags=["clusters"])
 app.include_router(environments.router, prefix="/api/v1", tags=["environments"])
 app.include_router(namespaces.router, prefix="/api/v1", tags=["namespaces"])
-app.include_router(deployments.router, prefix="/api/v1", tags=["deployments"])
 app.include_router(applications.router, prefix="/api/v1", tags=["applications"])
 app.include_router(users.router, prefix="/api/v1", tags=["users"])
 app.include_router(monitor.router)

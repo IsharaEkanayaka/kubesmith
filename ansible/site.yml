@@ -112,23 +112,17 @@
   tags: operator
   vars:
     operator_image: "docker.io/ishara24/kubesmith-operator:latest"
-    operator_ns: kubesmith-system
-    github_raw: "https://raw.githubusercontent.com/IsharaEkanayaka/kubesmith-operator/main"
+    operator_ns: operator-system
+    github_raw: "https://raw.githubusercontent.com/IsharaEkanayaka/kubesmith-operator/dev"
   tasks:
-    - name: Download AppDeployment CRD manifest
+    - name: Download Application CRD manifest
       get_url:
-        url: "{{ github_raw }}/config/crd/bases/kubesmith.io_appdeployments.yaml"
-        dest: /tmp/kubesmith-crd-appdeployments.yaml
-        mode: '0644'
-
-    - name: Download AppMonitor CRD manifest
-      get_url:
-        url: "{{ github_raw }}/config/crd/bases/kubesmith.io_appmonitors.yaml"
-        dest: /tmp/kubesmith-crd-appmonitors.yaml
+        url: "{{ github_raw }}/config/crd/bases/platform.kubesmith.io_applications.yaml"
+        dest: /tmp/kubesmith-crd-applications.yaml
         mode: '0644'
 
     - name: Apply CRDs
-      command: "kubectl apply -f /tmp/kubesmith-crd-appdeployments.yaml -f /tmp/kubesmith-crd-appmonitors.yaml"
+      command: "kubectl apply -f /tmp/kubesmith-crd-applications.yaml"
       environment:
         KUBECONFIG: /home/ubuntu/.kube/config
 
@@ -177,7 +171,7 @@
 
     - name: Set operator image
       command: >
-        kubectl set image deployment/kubesmith-operator-controller-manager
+        kubectl set image deployment/operator
         manager={{ operator_image }}
         -n {{ operator_ns }}
       environment:
@@ -185,7 +179,7 @@
 
     - name: Increase operator memory limits for Helm chart installations
       command: >
-        kubectl patch deployment kubesmith-operator-controller-manager
+        kubectl patch deployment operator
         -n {{ operator_ns }}
         --type=json
         -p='[{"op":"replace","path":"/spec/template/spec/containers/0/resources/limits/memory","value":"1Gi"},{"op":"replace","path":"/spec/template/spec/containers/0/resources/requests/memory","value":"256Mi"}]'
@@ -194,7 +188,7 @@
 
     - name: Wait for operator to become ready
       command: >
-        kubectl rollout status deployment/kubesmith-operator-controller-manager
+        kubectl rollout status deployment/operator
         -n {{ operator_ns }} --timeout=120s
       environment:
         KUBECONFIG: /home/ubuntu/.kube/config

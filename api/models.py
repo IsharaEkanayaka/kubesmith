@@ -147,59 +147,6 @@ class EnvironmentMemberDetail(BaseModel):
     access: str
 
 
-# ── AppDeployment (operator CR) ───────────────────────────────────────────────
-
-class CreateAppDeploymentRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=63, pattern=r'^[a-z][a-z0-9-]*$')
-    namespace: str = Field("default", min_length=1, max_length=63)
-    deploy_type: str = Field(..., pattern=r'^(helm|manifest)$')
-    # Helm fields
-    chart_repo: Optional[str] = None
-    chart_name: Optional[str] = None
-    chart_version: Optional[str] = None
-    values_override: Optional[str] = None
-    # Manifest fields
-    manifest: Optional[str] = None
-    pod_selector: Optional[dict] = None
-
-
-class AppDeploymentDetail(BaseModel):
-    name: str
-    namespace: str
-    deploy_type: str
-    chart_name: Optional[str] = None
-    chart_version: Optional[str] = None
-    phase: str
-    message: Optional[str] = None
-    ready_pods: int = 0
-    total_pods: int = 0
-    last_deployed_at: Optional[str] = None
-    created_at: str
-
-
-# ── AppMonitor (operator CR) ──────────────────────────────────────────────────
-
-class CreateAppMonitorRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=63, pattern=r'^[a-z][a-z0-9-]*$')
-    namespace: str = Field("default", min_length=1, max_length=63)
-    app_deployment_ref: str
-    metrics_enabled: Optional[bool] = True
-    metrics_port: Optional[str] = None
-    metrics_path: Optional[str] = None
-    metrics_interval: Optional[str] = None
-    alerts: Optional[list] = None
-
-
-class AppMonitorDetail(BaseModel):
-    name: str
-    namespace: str
-    app_deployment_ref: str
-    health: str
-    service_monitor_created: bool = False
-    prometheus_rule_created: bool = False
-    created_at: str
-
-
 # ── Application (new operator CR) ───────────────────────────────────────────
 
 class MetricsRequest(BaseModel):
