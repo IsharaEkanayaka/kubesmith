@@ -2,6 +2,7 @@ import configparser
 import logging
 import os
 import paramiko
+import subprocess
 
 from .. import config
 from ..database import get_db
@@ -79,3 +80,71 @@ def run_kubectl(cluster_id: str, args: list[str], timeout: int = 30, stdin_data:
 
     finally:
         client.close()
+
+
+def fetch_and_store_kubeconfig(cluster_id: str) -> str:
+    """Fetch /etc/kubernetes/admin.conf and store it under the cluster workspace.
+
+    Returns the local kubeconfig path.
+    """
+    ip = _get_control_plane_ip(cluster_id)
+
+    # Target VM credentials from workspace inventory
+    target_user, target_password = _get_cluster_ssh_creds(cluster_id)
+
+    workspace_dir = os.path.join(config.WORKSPACES_DIR, cluster_id)
+    os.makedirs(workspace_dir, exist_ok=True)
+    local_path = os.path.join(workspace_dir, "kubeconfig")
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    try:
+        client.connect(
+            ip,
+            username=target_user,
+            password=target_password,
+            look_for_keys=False,
+            allow_agent=False,
+            timeout=10,
+        )
+
+        sftp = client.open_sftp()
+        try:
+            sftp.get("/etc/kubernetes/admin.conf", local_path)
+        finally:
+            sftp.close()
+
+        return local_path
+
+    finally:
+        client.close()
+
+
+def _get_kubeconfig_path(cluster_id: str) -> str:
+    return os.path.join(config.WORKSPACES_DIR, cluster_id, "kubeconfig")
+
+
+def apply_manifest_with_kubeconfig(cluster_id: str, manifest: str, timeout: int = 30) -> str:
+    """Apply a manifest using the stored kubeconfig on the API host."""
+    kubeconfig_path = _get_kubeconfig_path(cluster_id)
+    if not os.path.exists(kubeconfig_path):
+        fetch_and_store_kubeconfig(cluster_id)
+
+    cmd = ["kubectl", "--kubeconfig", kubeconfig_path, "apply", "-f", "-"]
+    logger.info("[%s] %s", cluster_id, " ".join(cmd))
+
+    result = subprocess.run(
+        cmd,
+        input=manifest,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        err = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"kubectl apply failed: {err}")
+
+    return result.stdout.strip()

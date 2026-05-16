@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from .. import config
 from ..database import get_db
+from ..services.kubectl import fetch_and_store_kubeconfig
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,9 @@ def _provision_cluster(cluster_id: str, job_id: str):
 
         logger.info("[%s] ansible-playbook", cluster_id)
         _run_cmd(['ansible-playbook', '-i', inventory, site_yml], cwd=config.ANSIBLE_DIR, env=env, timeout=3600)
+
+        logger.info("[%s] fetching kubeconfig", cluster_id)
+        fetch_and_store_kubeconfig(cluster_id)
 
         _update_job(job_id, 'completed')
         _update_cluster(cluster_id, 'running')

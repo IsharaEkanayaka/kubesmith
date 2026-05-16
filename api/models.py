@@ -198,3 +198,34 @@ class AppMonitorDetail(BaseModel):
     service_monitor_created: bool = False
     prometheus_rule_created: bool = False
     created_at: str
+
+
+# ── Application (new operator CR) ───────────────────────────────────────────
+
+class MetricsRequest(BaseModel):
+    enabled: bool = True
+    port: Optional[str] = None
+    path: Optional[str] = None
+
+
+class CreateApplicationRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=63, pattern=r'^[a-z][a-z0-9-]*$')
+    repo_url: str
+    path: str
+    revision: str = Field("main")
+    namespace: str = Field(..., min_length=1, max_length=63)
+    sync_policy: str = Field("auto", pattern=r'^(auto|manual)$')
+    prune: bool = True
+    self_heal: bool = True
+    metrics: Optional[MetricsRequest] = None
+
+
+class ApplicationDetail(BaseModel):
+    name: str
+    namespace: str
+    destination_namespace: str
+    repo_url: str
+    path: str
+    revision: str
+    sync_policy: str
+    created_at: str
