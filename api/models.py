@@ -147,7 +147,28 @@ class EnvironmentMemberDetail(BaseModel):
     access: str
 
 
-# ── Application (new operator CR) ───────────────────────────────────────────
+# ── Application (operator CR) ───────────────────────────────────────────
+
+class ResourceQuotaRequest(BaseModel):
+    cpu: Optional[str] = None
+    memory: Optional[str] = None
+    pods: Optional[str] = None
+
+
+class LimitRangeRequest(BaseModel):
+    default_cpu: Optional[str] = None
+    default_memory: Optional[str] = None
+
+
+class RBACRequest(BaseModel):
+    owners: Optional[list[str]] = None
+    viewers: Optional[list[str]] = None
+
+
+class NetworkRequest(BaseModel):
+    deny_all: Optional[bool] = False
+    allow_from_namespaces: Optional[list[str]] = None
+
 
 class MetricsRequest(BaseModel):
     enabled: bool = True
@@ -165,6 +186,10 @@ class CreateApplicationRequest(BaseModel):
     prune: bool = True
     self_heal: bool = True
     metrics: Optional[MetricsRequest] = None
+    resource_quota: Optional[ResourceQuotaRequest] = None
+    limit_range: Optional[LimitRangeRequest] = None
+    rbac: Optional[RBACRequest] = None
+    network: Optional[NetworkRequest] = None
 
 
 class ApplicationDetail(BaseModel):

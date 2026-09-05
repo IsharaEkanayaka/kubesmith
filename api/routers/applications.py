@@ -58,19 +58,58 @@ def create_application(cluster_id: str, req: CreateApplicationRequest, user: dic
             if req.metrics.path:
                 monitoring_spec["metrics"]["path"] = req.metrics.path
 
+        destination_spec: dict = {
+            "namespace": req.namespace,
+        }
+        if req.resource_quota:
+            rq = {}
+            if req.resource_quota.cpu:
+                rq["cpu"] = req.resource_quota.cpu
+            if req.resource_quota.memory:
+                rq["memory"] = req.resource_quota.memory
+            if req.resource_quota.pods:
+                rq["pods"] = req.resource_quota.pods
+            if rq:
+                destination_spec["resourceQuota"] = rq
+
+        if req.limit_range:
+            lr = {}
+            if req.limit_range.default_cpu:
+                lr["defaultCpu"] = req.limit_range.default_cpu
+            if req.limit_range.default_memory:
+                lr["defaultMemory"] = req.limit_range.default_memory
+            if lr:
+                destination_spec["limitRange"] = lr
+
         spec = {
             "source": {
                 "repoUrl": req.repo_url,
                 "path": req.path,
                 "revision": req.revision,
             },
-            "destination": {
-                "namespace": req.namespace,
-            },
+            "destination": destination_spec,
             "deploy": deploy_spec,
         }
         if monitoring_spec:
             spec["monitoring"] = monitoring_spec
+
+        if req.rbac:
+            rbac_spec = {}
+            if req.rbac.owners:
+                rbac_spec["owners"] = req.rbac.owners
+            if req.rbac.viewers:
+                rbac_spec["viewers"] = req.rbac.viewers
+            if rbac_spec:
+                spec["rbac"] = rbac_spec
+
+        if req.network:
+            net_spec = {}
+            if req.network.deny_all is not None:
+                net_spec["denyAll"] = req.network.deny_all
+            if req.network.allow_from_namespaces:
+                net_spec["allowFromNamespaces"] = req.network.allow_from_namespaces
+            if net_spec:
+                spec["network"] = net_spec
 
         cr = {
             "apiVersion": "platform.kubesmith.io/v1alpha1",
